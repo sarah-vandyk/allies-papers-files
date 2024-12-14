@@ -1,0 +1,1574 @@
+---
+title: "Final FCD Analysis"
+author: "Sarah Van Dyk"
+date: "2024-08-12"
+output:
+  html_document: default
+  pdf_document: default
+---
+#Code file for Victims and defendants in federal human trafficking prosecutions
+Request for data or questions about code can be directed to Sarah Sowell Van Dyk - sarah.e.sowell@vanderbilt.edu 
+Chunks are ordered by their presentation in the paper, with loading and cleaning included at the beginning
+Many summary statistics in the paper are stored in tidles, for ease of marking down this file, view commands are commented out - to view summary statistics, remove #.  
+
+#Load Library
+```{r}
+library(dplyr)
+library(purrr)
+library(mice)
+library(plm)
+library(lme4)
+library(MASS)
+library(missMethods)
+library(ggridges)
+library(ggeffects)
+library(stringr)
+library(broom)
+library(broom.mixed)
+library(reshape2)
+library(tidyverse)
+```
+
+#Load Data
+```{r}
+#Check Version
+R.version.string
+
+#Set Working Directory
+getwd()
+setwd("/Users/sarahsowell/Downloads")
+
+
+
+
+# Read in all Relevant Data
+allCase <- read.csv("cases updated.csv")
+allDef <- read.csv("defendant.csv")
+allCrime <- read.csv("crime location (3).csv")
+
+
+#Create Defendant level data with all case information - this is the data frame used for any analysis done at the defendant level 
+lightHouse <- left_join(
+  allDef,
+  allCase,
+  by = "case_id",
+  copy = TRUE, 
+  suffix = c(".x", ".y"),
+  multiple = "all"
+)
+
+ 
+# For reference: allCase is data at case level unit of analysis, lightHouse is data at defendant level of analysis
+```
+
+#Create Variables as Needed
+```{r}
+library(stringr)
+
+#Case Level Trafficking Binary
+allCase$sex_labor <- ifelse(str_detect(allCase$trafficking_type_multiple, "Minor Sex Trafficking"), 1, NA)
+
+allCase$sex_labor <- ifelse(str_detect(allCase$trafficking_type_multiple, "Adult Sex Trafficking"), 1, allCase$sex_labor)
+
+allCase$sex_labor <- ifelse(str_detect(allCase$trafficking_type_multiple, "Labor Trafficking"), 0, allCase$sex_labor)
+
+allCase$sex_labor <- ifelse(str_detect(allCase$trafficking_type_multiple, "Both Sex and Labor Trafficking"), NA, allCase$sex_labor)
+
+table(allCase$sex_labor)
+
+#Defendant Level Trafficking Binary
+
+lightHouse$sex_labor <- ifelse(str_detect(lightHouse$trafficking_type_multiple, "Minor Sex Trafficking"), 1, NA)
+
+lightHouse$sex_labor <- ifelse(str_detect(lightHouse$trafficking_type_multiple, "Adult Sex Trafficking"), 1, lightHouse$sex_labor)
+
+lightHouse$sex_labor <- ifelse(str_detect(lightHouse$trafficking_type_multiple, "Labor Trafficking"), 0, lightHouse$sex_labor)
+
+lightHouse$sex_labor <- ifelse(str_detect(lightHouse$trafficking_type_multiple, "Both Sex and Labor Trafficking"), NA, lightHouse$sex_labor)
+
+
+#Defendant Level Nationality Binary
+lightHouse$def_forg_binary <- ifelse(lightHouse$defendants_country_of_origin == "United States",1,0)
+
+#Defendant Level Gender Binary
+
+lightHouse$gender_binary1 <- ifelse(lightHouse$defendants_gender == "Male",1, NA)
+                             
+lightHouse$gender_binary <-  ifelse(lightHouse$defendants_gender == "Female",0, lightHouse$gender_binary1)
+
+
+#Clean Race Variable
+
+lightHouse$defendants_race <- ifelse(lightHouse$defendants_race == "Unknown", NA, lightHouse$defendants_race)
+
+lightHouse$defendants_race <- ifelse(lightHouse$defendants_race == "Native American", "Other", lightHouse$defendants_race)
+
+lightHouse$defendants_race <- ifelse(lightHouse$defendants_race == "Indian", "Other", lightHouse$defendants_race)
+
+table(lightHouse$defendants_race)
+
+#Binary of Foreign Identity 
+
+lightHouse$def_forg_binary <- ifelse(lightHouse$defendants_country_of_origin == "United States",1,0)
+
+
+```
+
+#Part I - Data Introduction
+##Summary Statistics for Dataset Section
+```{r}
+#Number of Cases
+nrow(allCase)
+
+#Number of Defendants
+nrow(lightHouse)
+
+#Defs per case
+4584/2390
+
+#Number of Victims
+sum(as.numeric(allCase$case_number_victims), na.rm = TRUE)
+
+#Victims per case 
+12132/2390
+
+#Number of Trafficking Locations
+nrow(allCrime)
+
+#Locations per case
+5743/2390
+
+```
+
+#Case Level Data
+
+
+##Case Trend Grouped by Year
+```{r}
+
+class(allCase$trafficking_type)
+start_year <- 2000
+
+table(allCase$trafficking_type)
+
+# Use dplyr to create 5-year groups and convert to an ordinal factor
+allCase$year <- allCase$case_year-2000
+allCase_y <- allCase %>%
+  summarise(year_group = ifelse(year >= 0 & year < 5, 1,
+                       ifelse(year >= 5 & year < 10, 2,
+                        ifelse(year >= 10 & year < 15, 3,
+                          ifelse(year >= 15 & year < 20, 4, NA)))),
+         )
+
+
+#Calculate Total per Year Group
+allCase_y2 <- allCase_y%>%
+  group_by(year_group)%>%
+  summarise(
+    total = n()
+  )
+
+#Calculate Growth Over Year
+avg1 <- 209/71
+avg2 <- 631/209
+avg3 <- 1001/631
+
+print(mean((avg1+avg2+avg3)/3))
+
+
+```
+
+##Trafficking Type Averages and T-Test of Sex v. labor 
+```{r}
+#Number of cases by Trafficking Type
+dta <- allCase %>%
+  group_by(trafficking_type) %>%
+  summarise(
+    Count = n()
+  )
+#view(dta)
+
+#Difference in means test of case type
+t.test(allCase$sex_labor)
+
+```
+
+##Trafficking before and after 2011
+```{r}
+#Group data into before and after 2011
+to2011 <- subset(allCase, allCase$case_year < 2012)
+after2011 <- subset(allCase, allCase$case_year > 2011)
+
+##Up to 2011
+totalCases <- nrow(to2011)
+totalLabor <- sum((to2011$trafficking_type == "Labor Trafficking"),na.rm=TRUE)
+totalLaborBoth <- sum((to2011$trafficking_type == "Both Sex andLabor Trafficking"),na.rm=TRUE)
+
+#Calculate Percent of Cases invovling any Labor Trafficking
+(totalLabor +totalLaborBoth)/totalCases
+
+##After 2011
+totalCases <- nrow(after2011)
+totalLabor <- sum((after2011$trafficking_type == "Labor Trafficking"),na.rm=TRUE)
+totalLaborBoth <- sum((after2011$trafficking_type == "Both Sex andLabor Trafficking"),na.rm=TRUE)
+
+#Calculate Percent of Cases invovling any Labor Trafficking
+(totalLabor +totalLaborBoth)/totalCases
+```
+
+##Cases by Geography
+```{r}
+#Number of Cases by State
+state <- allCase %>%
+  group_by(state_prosecuted) %>%
+  summarize(
+    count = n(),
+  )
+
+
+#view(state)
+
+#Add Population Data
+state_data <- data.frame(
+  state_prosecuted = c("AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA",
+                 "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD",
+                 "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ",
+                 "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC",
+                 "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY"),
+  population = c(5054000, 735000, 7276000, 3039000, 39576000, 5848000,
+                 3600000, 1018000, 22375000, 10845000, 1451000, 1937000,
+                 12671000, 6833000, 3227000, 2932000, 4532000, 4649000, 
+                 1360000, 6177000, 7029000, 9958000, 5770000, 2961000,
+                 6185000, 1117000, 1973000, 3229000, 1372000, 9290000,
+                 2120000, 19890000, 10600000, 774000, 11700000, 3980000,
+                 4249000, 12900000, 1060000, 5341000, 905000, 6960000,
+                 30400000, 3361000, 647000, 8699000, 7764000, 1794000,
+                 5907000, 577000)
+)
+
+state2 <- merge(state,state_data)
+
+#Calculate Normalized Totals
+state3 <- state2 %>%
+  group_by(state_prosecuted)%>%
+  summarize(
+    normalized = count/(population/ 100000)
+  )
+#view(state3)
+
+t.test(state3$normalized)
+```
+
+##Prosecution Over Time - Format Data
+```{r}
+
+dta <- allCase %>%
+  group_by(case_year)%>%
+  summarise(
+    `Labor Trafficking` = sum(trafficking_type == "Labor Trafficking"),
+    `Adult Sex Trafficking`  = sum(trafficking_type == "Adult Sex Trafficking"),
+    `Minor Sex Trafficking`  = sum(trafficking_type == "Minor Sex Trafficking"),
+   `Both Labor and Sex Trafficking`  = sum(trafficking_type == "Both Sex and Labor Trafficking")
+  )
+
+#view(dta)
+
+
+dta$total<-  dta$`Labor Trafficking` + dta$`Adult Sex Trafficking`+dta$`Minor Sex Trafficking`+dta$`Both Labor and Sex Trafficking`
+
+
+dta3 <-melt(dta, id.vars = c("case_year", "total"), variable.name = "trafficking_type", value.name = "percent_of_total")
+
+
+```
+
+##Figure 1 - Prosecution Over Time
+```{r}
+
+one <- ggplot(data = na.omit(dta3), aes(x = (case_year), y = percent_of_total, fill = trafficking_type))+
+  geom_bar(position = "stack", stat = "identity")+ 
+  scale_fill_manual(values=(c("#1957CD", "#0F347B", "#46ADE3", "#1895A7" )))+
+  ggtitle("") +
+  theme_minimal() +
+  xlab("") +
+  ylim(0,300)+
+  ylab("Number of Cases")+
+  labs(fill = "")
+
+
+one + theme(
+  panel.grid.major = element_blank(), 
+  panel.grid.minor = element_blank(),
+  plot.title = element_text(face = "bold", size = 12),
+    axis.text.x = element_text(size = 12)
+)
+```
+
+##Victim Summary Statistics
+```{r}
+#Number of Victims Per Case
+range(as.numeric(allCase$case_number_victims), na.rm=TRUE)
+
+#Number of Sting Operations
+sum(as.numeric(allCase$case_number_victims) == 0, na.rm=TRUE)
+
+#Number of Cases with Large number of Victims 
+sum(as.numeric(allCase$case_number_victims) >= 50, na.rm=TRUE)
+
+#Number of Foreign Victims In those large victims cases 
+dta2 <- subset(allCase, (as.numeric(allCase$case_number_victims) >= 50))
+
+sum(as.numeric(dta2$case_number_victims_foreign))
+
+sum(as.numeric(dta2$case_number_victims))
+
+5242/5782 #Percent of Total vi
+
+#Trafficking Type as Predictor of Number of Victims
+modVic <- lm(as.numeric(case_number_victims) ~ trafficking_type, data = allCase)
+summary(modVic)
+
+#Calculate Averages by Trafficking Type
+dta <- allCase %>%
+  group_by(trafficking_type)%>%
+  summarize(
+    avg = mean(as.numeric(case_number_victims), na.rm=TRUE)
+  )
+
+#view(dta)
+
+```
+
+##Victim Age Summary Statistics
+```{r}
+#Number of Victims by Age
+minor <- sum(as.numeric(allCase$case_number_victims_minor), na.rm=TRUE)
+print(minor)
+all <- sum(as.numeric(allCase$case_number_victims), na.rm=TRUE)
+print(all)
+adult <- all-minor
+print(adult)
+
+#Percent of Victims by age
+8696/12132
+3436/12132
+
+# Looking at Victim Age Across Traff Type 
+# allCase <- allCase %>%
+#   group_by(case_id) %>%
+#   mutate(
+#     any_minor = ifelse(coalesce(as.numeric(case_number_victims_minor), 0) > 0, 1, 0),
+#     percent_minor = coalesce(as.numeric(case_number_victims_minor), 0) / coalesce(as.numeric(case_number_victims), 1)
+#   ) 
+# 
+# allCase$traff_m <- fct_relevel(allCase$trafficking_type, "Minor Sex Trafficking")
+# mod_minor <- lm(percent_minor ~ traff_m, data=allCase)
+# summary(mod_minor)
+
+#Number of Victims by Case
+dta <- allCase %>%
+  group_by(trafficking_type) %>%
+  summarise(
+    any_minor = max(ifelse(as.numeric(case_number_victims_minor) > 0, 1, 0), na.rm = TRUE),
+    total_minors = sum(as.numeric(case_number_victims_minor), na.rm = TRUE),
+    all = sum(as.numeric(case_number_victims), na.rm = TRUE),
+    adult = all - total_minors,
+    percent_minor = ifelse(all > 0, total_minors / all * 100, 0)  
+  )
+
+#view(dta)
+
+
+```
+
+##Vicitim Age by Trafficking Type - Format Data
+```{r}
+table(allCase$trafficking_type)
+
+
+dta <- allCase %>%
+  group_by(trafficking_type)%>%
+  summarise(
+    count = sum(as.numeric(case_number_victims),na.rm = TRUE),
+    count_m = sum(as.numeric(case_number_victims_minor),na.rm = TRUE),
+    count_a = count - count_m,
+   `Adult Victim` = count_a/count*100,
+    `Minor Victim` = count_m/count*100
+  )
+
+
+dta$total<-  dta$`Adult Victim` + dta$ `Minor Victim`
+
+dta2<-subset(dta, select=c("trafficking_type", "total", "Adult Victim",
+                           "Minor Victim"))
+
+
+dta3 <-melt(dta2, id.vars = c("trafficking_type", "total"), variable.name = "victim_type", value.name = "percent_of_victim")
+
+#view(dta3)
+
+
+```
+
+##Figure 3 -Create Stacked Bar Chart of Trafficking Type
+```{r}
+three <- ggplot(data = dta3, aes(x = trafficking_type, y = percent_of_victim, fill = victim_type))+
+  geom_bar(position = "stack", stat = "identity")+ 
+  scale_fill_manual(values=(c("#1957CD", "#0F347B" )))+
+  ggtitle("") +
+  theme_minimal() +
+  xlab("") +
+  ylab("Percent Of Whole")+
+  labs(fill = "")
+
+
+three + theme(
+  panel.grid.major = element_blank(), 
+  panel.grid.minor = element_blank(),
+  plot.title = element_text(face = "bold", size = 12),
+  axis.text.x = element_text(size = 12)
+)
+```
+
+##Victim Gender Summary Statistics
+```{r}
+library(stargazer)
+
+#Victim Age Summary
+sortedGenderAll <- allCase %>% 
+  summarise(
+    count_male = sum(as.numeric(case_number_victims_male), na.rm = TRUE),
+    count_female = sum(as.numeric(case_number_victims_female), na.rm = TRUE),
+    total_victims = sum(as.numeric(case_number_victims), na.rm=TRUE),
+    percent_male = ifelse(total_victims > 0, (count_male / total_victims) * 100, NA),
+    percent_female = ifelse(total_victims > 0, (count_female / total_victims) * 100, NA),
+    anyMale = ifelse(count_male >= 1, 1, 0),
+    sex_labor2 = ifelse(sex_labor == 1,0,1)
+  )
+
+#view(sortedGenderAll)
+
+#note: This tidle includes the information for footnote 20 
+#Victim Gender across Trafficking Type
+sortedGenderTraff <- allCase %>% 
+  group_by(trafficking_type)%>%
+  summarise(
+    count_male = sum(as.numeric(case_number_victims_male), na.rm = TRUE),
+    count_unknown = sum(as.numeric(case_number_victims_unknown),na.rm=TRUE),
+    count_female = sum(as.numeric(case_number_victims_female), na.rm = TRUE),
+    total_victims = sum(as.numeric(case_number_victims), na.rm=TRUE),
+    percent_male = ifelse(total_victims > 0, (count_male / total_victims) * 100, NA),
+    percent_female = ifelse(total_victims > 0, (count_female / total_victims) * 100, NA),
+    percent_unknown = ifelse(total_victims > 0, (count_unknown / total_victims) * 100, NA),
+    anyMale = ifelse(count_male >= 1, 1, 0)
+  )
+
+#view(sortedGenderTraff)
+table(sortedGenderAll$sex_labor2)
+
+#Model Likelihood of having a male victim
+sortedGenderAll <- allCase %>% 
+  group_by(trafficking_type)%>%
+  summarise(
+    count_male = sum(as.numeric(case_number_victims_male), na.rm = TRUE),
+    count_female = sum(as.numeric(case_number_victims_female), na.rm = TRUE),
+    total_victims = sum(as.numeric(count_male+count_female), na.rm=TRUE),
+    percent_male = ifelse(total_victims > 0, (count_male / total_victims) * 100, NA),
+    percent_female = ifelse(total_victims > 0, (count_female / total_victims) * 100, NA),
+    anyMale = ifelse(count_male >= 1, 1, 0),
+    sex_labor2 = ifelse(sex_labor == 1,0,1)
+  )
+
+#view(sortedGenderAll)
+mod_gender <- glm(anyMale ~ sex_labor2, data = sortedGenderAll, family = binomial() )
+stargazer(mod_gender, type="text")
+
+#Number of victims with unknown Gender
+sum(as.numeric(allCase$case_number_victims_unknown),na.rm=TRUE)
+
+```
+
+##Victim Gender - Format Data
+```{r}
+dta <- allCase %>%
+  group_by(trafficking_type) %>%
+  summarise(
+    count_f = sum(as.numeric(case_number_victims_female), na.rm = TRUE),
+    total_victims = sum(as.numeric(case_number_victims), na.rm = TRUE),
+    count_m = total_victims - count_f,
+    `Female Victim` = count_f / total_victims * 100,
+    `Male Victim` = count_m / total_victims * 100
+  )
+view(dta)
+
+dta$total<-  dta$`Female Victim` + dta$`Male Victim`
+
+dta2<-subset(dta, select=c("trafficking_type", "total", "Male Victim",
+                           "Female Victim"))
+
+
+dta3 <-melt(dta2, id.vars = c("trafficking_type", "total"), variable.name = "victim_type", value.name = "percent_of_victim")
+
+```
+
+##Figure 4 - Stacked Bar chart of Victim Gender
+```{r}
+four <- ggplot(data = dta3, aes(x = trafficking_type, y = percent_of_victim, fill = victim_type))+
+  geom_bar(position = "stack", stat = "identity")+ 
+  scale_fill_manual(values=(c("#1957CD", "#0F347B" )))+
+  ggtitle("") +
+  theme_minimal() +
+  xlab("") +
+  ylab("Percent Of Whole")+
+  labs(fill = "")+
+  coord_flip()
+
+
+four + theme(
+  panel.grid.major = element_blank(), 
+  panel.grid.minor = element_blank(),
+  plot.title = element_text(face = "bold", size = 12),
+  axis.text.x = element_text(size = 12)
+)
+```
+
+##Foreign National Victim Summary Statistics
+```{r}
+#Number of Foreign Victims
+sum(as.numeric(allCase$case_number_victims_foreign), na.rm = TRUE)
+
+#Percentage of Foreign versus not Foreign Victims
+6612/12132
+282/12132
+
+#Number of Cases with Foreign Victims
+dta2 <- allCase %>%
+    summarise(
+      hasForeign = sum(as.numeric(case_number_victims_foreign)>0, na.rm=TRUE),
+      total = n(),
+      percent = hasForeign/total
+    )
+
+#view(dta2)
+
+
+#Number of Forg/Non-Forg victims by Trafficking Type
+dta3 <- allCase %>%
+  group_by(trafficking_type)%>%
+    summarise(
+      foreign = sum(as.numeric(case_number_victims_foreign), na.rm = TRUE),
+      count_total = sum(as.numeric(case_number_victims),na.rm = TRUE),
+      percent = foreign/count_total
+    )
+#view(dta)
+
+#OLS Model of Likiehood of having Foreign Victims by Trafficking Type
+dta4 <- allCase %>%
+  group_by(case_id)%>%
+    mutate(
+      hasForeign = sum(as.numeric(case_number_victims_foreign)>0, na.rm=TRUE),
+      total = n(),
+      percent = hasForeign/total
+    )
+
+mod_forg <- glm(hasForeign ~ trafficking_type, data = dta4, family = binomial())
+summary(mod_forg)
+```
+
+##Victim Nationality - Format Data
+```{r}
+library(reshape2)
+dta <- allCase %>%
+  group_by(trafficking_type)%>%
+  summarise(
+    count = sum(as.numeric(case_number_victims),na.rm = TRUE),
+    count_f = sum(as.numeric(case_number_victims_foreign),na.rm = TRUE),
+    count_us = count - count_f,
+   `Foreign National` = count_f/count*100,
+    `US National` = count_us/count*100
+  )
+
+
+dta$total<-  dta$`Foreign National` + dta$ `US National`
+
+dta2<-subset(dta, select=c("trafficking_type", "total", "Foreign National",
+                           "US National"))
+
+
+dta3 <-melt(dta2, id.vars = c("trafficking_type", "total"), variable.name = "victim_type", value.name = "percent_of_victim")
+
+```
+
+##Figure 5 - Victim Nationality
+```{r}
+
+three <- ggplot(data = dta3, aes(x = trafficking_type, y = percent_of_victim, fill = victim_type))+
+  geom_bar(position = "stack", stat = "identity")+ 
+  scale_fill_manual(values=(c("#1957CD", "#0F347B" )))+
+  ggtitle("") +
+  theme_minimal() +
+  xlab("") +
+  ylab("Percent Of Whole")+
+  labs(fill = "")
+
+
+three + theme(
+  panel.grid.major = element_blank(), 
+  panel.grid.minor = element_blank(),
+  plot.title = element_text(face = "bold", size = 12),
+  axis.text.x = element_text(size = 12)
+)
+```
+
+##Time Series for Victims
+```{r}
+#Number of Victims Over Time
+mod_time_total <- lm(as.numeric(case_number_victims) ~ case_year, data=allCase)
+summary(mod_time_total)
+
+#Number of Minors over time
+
+dta2 <- allCase %>%
+  group_by(case_id) %>%
+  mutate(
+    total_m= sum(as.numeric(case_number_victims_minor, na.rm = TRUE)),  
+    total = sum(as.numeric(case_number_victims, na.rm = TRUE)), 
+    percent = total_m / total  
+  )
+
+mod_time_minor <- lm(percent ~ case_year, data=dta2)
+summary(mod_time_minor)
+
+#Percent of Cases with any Minor Over Time
+allCase$minor_binary <- ifelse(allCase$case_number_victims_minor > 0,1,0)
+table(allCase$minor_binary)
+
+dta2 <- allCase %>%
+  group_by(case_year) %>%
+  summarise(
+    total_w_m = sum(minor_binary, na.rm = TRUE),  
+    total = n(), 
+    percent = total_w_m / total  
+  ) %>%
+  ungroup()
+
+mod_time_minor_percent <- lm(percent ~ case_year, data = dta2)
+summary(mod_time_minor_percent)
+
+#Gender Over Time
+allCase$male_binary <- ifelse(as.numeric(allCase$case_number_victims_male) > 0,1,0)
+table(allCase$male_binary)
+
+dta3 <- allCase %>%
+  group_by(case_year) %>%
+  summarise(
+    total_m = sum((male_binary), na.rm=TRUE), 
+    total = n(), 
+    percent = total_m / total ,
+    year = as.numeric(case_year),
+    sex_labor2 = as.numeric(sex_labor)
+  ) %>%
+  ungroup()
+
+
+mod_time_male_percent <- lm(percent ~ case_year, data = dta3)
+summary(mod_time_male_percent)
+
+
+#Cases with Any Male Over Time
+dta4 <- allCase %>%
+  filter(trafficking_type != "Labor Trafficking")%>%
+  group_by(case_year) %>%
+  summarise(
+    total_m = sum(as.numeric(case_number_victims_male), na.rm = TRUE), 
+    total = sum(as.numeric(case_number_victims), na.rm = TRUE), 
+    percent = (total_m+1) / (total+1) ,
+    year = as.numeric(case_year)
+  ) %>%
+  ungroup()
+view(dta4)
+
+mod_time_male <- lm(percent ~ year, data = dta4)
+summary(mod_time_male)
+
+#Cases with Foreign Victims over Time
+dta5 <- lightHouse%>%
+  group_by(case_year)%>%
+  mutate(
+    total = n(),
+    totalNoUS = sum(def_forg_binary == 0),
+    forgNat = (totalNoUS)/total
+  )%>%
+  ungroup()
+
+mod_time_forg <- lm(forgNat ~ case_year, data = dta5)
+summary(mod_time_forg)
+
+```
+
+##Trafficking Location Summary Statistics
+```{r}
+
+#Total Crime Locations
+nrow(allCrime)
+
+#Total County Locations
+sum((allCrime$crime_location_county != "Unlisted" ),na.rm=TRUE)
+
+#Total City Locations
+sum(allCrime$crime_location_city != "Unlisted")
+
+#Looking at Top Counties
+top_10_counties <- c("Los Angeles", "Cook", "Harris", "Maricopa", "San Diego", 
+                     "Orange", "Miami-Dade", "Dallas", "Kings", "Riverside")
+
+table(allCrime$crime_location_county)
+637/3909
+
+#Create Measure of if Crime was in Top 10 County
+allCrime$crime_location_county <- ifelse(allCrime$crime_location_county == "Unlisted", NA, allCrime$crime_location_county)
+allCrime$big_county_binary <- ifelse(is.na(allCrime$crime_location_county), NA, ifelse(allCrime$crime_location_county %in% top_10_counties, 1, 0))
+
+
+table(allCrime$big_county_binary)
+
+dta <- allCrime %>%
+  group_by(crime_location_county)%>%
+  mutate(
+    count = n()
+  )
+
+#Likelihood of Crime being in a Big County
+mod_big_county <- lm(count ~ big_county_binary, data = dta)
+stargazer(mod_big_county, type = "text")
+
+#Top Counties
+dta <- allCrime %>%
+  group_by(crime_location_county)%>%
+  summarise(
+    count = n()
+  )
+#view(dta)
+
+#Count Top Cities
+dta <- allCrime %>%
+  group_by(crime_location_city)%>%
+  summarise(
+    count = n()
+  )
+#view(dta)
+
+```
+
+#Defendant Level Data
+
+##Defendant Summary Stats
+```{r}
+#As noted above - 'lightHouse' is the dataset that contains defendant level data, the dataset is named after Allies data aggregation and visualization tool which houses FCD - when case level data is needed (to look at defendants in aggregate, allCase is used)
+
+#Number of Defendants
+nrow(lightHouse)
+
+#Number of Defendants Per Case Over Time
+mod_def_time <- lm(case_number_defendants ~ case_year, data = allCase)
+summary(mod_def_time)
+
+#Number of Defendants Across Trafficking Type
+dta <- allCase %>% 
+  group_by(trafficking_type)%>%
+  summarise(
+    avg= mean(case_number_defendants)
+  )
+
+#view(dta)
+
+
+  
+```
+
+##Defendant Race Summary Statistics
+```{r}
+library(plm)
+
+#Summarizing Race 
+dta <- lightHouse %>%
+  group_by(trafficking_type.x)%>%
+  summarise(
+    count_black = sum(defendants_race == "Black", na.rm = TRUE),
+    count_asian = sum(defendants_race == "Asian", na.rm = TRUE),
+    count_white = sum(defendants_race == "White", na.rm = TRUE),
+    count_other = sum(defendants_race == "Other", na.rm = TRUE),
+    count_hispanic = sum((defendants_race == "Hispanic"),na.rm = TRUE),
+    count_unknown = 4584 - count_asian -count_black-count_white-count_other - count_hispanic,
+    total_count = n(),  # Total number of defendants
+    Black = count_black / total_count * 100,  # Percentage of Black defendants
+    Asian = count_asian / total_count * 100,  # Percentage of Asian defendants
+    White = count_white / total_count * 100,  # Percentage of White defendants
+    Other = (count_other+count_unknown) / total_count * 100 ,
+    Hispanic = count_hispanic/total_count * 100# Percentage of Other defendants
+  )
+#view(dta)
+
+dta <- lightHouse %>%
+  group_by(case_year)%>%
+  summarise(
+    count_black = sum(defendants_race == "Black", na.rm = TRUE),
+    count_asian = sum(defendants_race == "Asian", na.rm = TRUE),
+    count_white = sum(defendants_race == "White", na.rm = TRUE),
+    count_other = sum(defendants_race == "Other", na.rm = TRUE),
+    count_hispanic = sum((defendants_race == "Hispanic"),na.rm = TRUE),
+    count_unknown = 4584 - count_asian -count_black-count_white-count_other - count_hispanic,
+    total_count = n(), 
+    Black = count_black / total_count * 100, 
+    Asian = count_asian / total_count * 100,  
+    White = count_white / total_count * 100,  
+    Other = (count_other+count_unknown) / total_count * 100 ,
+    Hispanic = count_hispanic/total_count * 100
+  )
+
+#Modeling Race over Time
+lightHouse$defendants_race <- fct_relevel(lightHouse$defendants_race, "White")
+
+dta <- lightHouse %>%
+  group_by(defendants_race, case_year) %>%
+  summarise(
+    count = n(),
+    .groups = 'drop'
+  )
+
+# Group by year to calculate the total counts for each year
+year_totals <- dta %>%
+  group_by(case_year) %>%
+  summarise(
+    total_count = sum(count),
+    .groups = 'drop'
+  )
+
+# Join the year_totals with the original data and calculate the percent for each clean_sex by year
+dta2 <- dta %>%
+  left_join(year_totals, by = "case_year") %>%
+  mutate(
+    percentYear = count / total_count * 100
+  )
+
+#view(dta2)
+
+#Fixed Effect Model of Mean Variation by Year 
+mod4 <- plm(percentYear ~ defendants_race, index = "case_year", data = na.omit(dta2))
+stargazer(mod4, type = "text")
+
+
+#Looking at Sex and Labor trafficking distributions of hispanic defendants
+
+dta <- lightHouse %>%
+  group_by(trafficking_type.x)%>%
+  summarise(
+    count_hispanic = sum((defendants_race == "Hispanic"),na.rm = TRUE),
+    total_count = n(),  
+    Hispanic = count_hispanic/total_count * 100
+  )
+#view(dta)
+
+#OLS Model of Sex versys Labor Trafficking distribution of Black Defendants
+dta <- lightHouse %>%
+  summarise(
+    count_black = sum((defendants_race == "Black"),na.rm = TRUE),
+    total_count = n(),  
+    Black = count_black/total_count * 100
+  )
+view(dta)
+
+#Black Defendants Across State
+#States used to remove territories
+states = c("AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA",
+                 "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD",
+                 "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ",
+                 "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC",
+                 "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY")
+
+table(lightHouse$state_prosecuted)
+
+dta <- lightHouse %>%
+  filter(state_prosecuted %in% states)%>%
+  group_by(state_prosecuted)%>%
+  summarise(
+    count_black = sum(defendants_race == "Black", na.rm = TRUE),
+    count_asian = sum(defendants_race == "Asian", na.rm = TRUE),
+    count_white = sum(defendants_race == "White", na.rm = TRUE),
+    count_other = sum(defendants_race == "Other", na.rm = TRUE),
+    count_hispanic = sum((defendants_race == "Hispanic"),na.rm = TRUE),
+    count_unknown = 4584 - count_asian -count_black-count_white-count_other - count_hispanic,
+    total_count = n(), 
+    Black = count_black / total_count * 100, 
+    Asian = count_asian / total_count * 100,  
+    White = count_white / total_count * 100,  
+    Other = (count_other+count_unknown) / total_count * 100 ,
+    Hispanic = count_hispanic/total_count * 100,
+    black_most_prosecuted = ifelse(Black > White, 1,
+      ifelse(Black > Asian,1,
+             ifelse(Black > Other,1, 0)))
+    )
+  
+
+table(dta$black_most_prosecuted)
+view(dta)
+
+#Black Defendants Across Trafficking Type
+dta <- lightHouse %>%
+  group_by(trafficking_type.x)%>%
+  summarise(
+    count_black = sum((defendants_race == "Black"),na.rm = TRUE),
+    total_count = n(),  
+    Black = count_black/total_count * 100
+  )
+view(dta)
+
+```
+
+##Defendant Race - Format Data
+```{r}
+library(nnet)
+library(stargazer)
+library(margins)
+library(effects)
+library(tidyverse)
+library(reshape2)
+
+table(lightHouse$defendants_race)
+
+dta <- lightHouse %>%
+  group_by(trafficking_type.x)%>%
+  summarise(
+    count_black = sum((defendants_race == "Black"),na.rm = TRUE),
+    count_asian = sum((defendants_race == "Asian"),na.rm = TRUE),
+    count_white = sum((defendants_race == "White"),na.rm = TRUE),
+    count_other = sum((defendants_race == "Other"),na.rm = TRUE),
+    count_hispanic = sum((defendants_race == "Hispanic"),na.rm = TRUE),
+    count = count_black +count_asian+count_white+count_other+count_hispanic,
+    Black = count_black/count*100,
+    Asian = count_asian/count*100,
+    Other = count_white/count*100,
+    White= count_other/count*100,
+    Hispanic = count_hispanic/count*100
+  )
+
+
+dta$total<-  dta$Black + dta$Asian + dta$Hispanic + dta$White+dta$Other
+
+dta2<-subset(dta, select=c("trafficking_type.x", "total", 
+                           "Asian", "Black", "Other","Hispanic", "White" ))
+
+
+dta3 <-melt(dta2, id.vars = c("trafficking_type.x", "total"), variable.name = "victim_type", value.name = "percent_of_victim")
+
+
+
+```
+
+##Figure 7 - Race by Trafficking Type
+```{r}
+seven <- ggplot(data = dta3, aes(x = trafficking_type.x, y = percent_of_victim, fill = victim_type))+
+  geom_bar(position = "stack", stat = "identity")+ 
+  scale_fill_manual(values=(c("#1957CD", "#0F347B", "#46ADE3", "#1895A7","#A5E3ED" )))+
+  ggtitle("") +
+  theme_minimal() +
+  xlab("") +
+  ylab("Percent Of Whole")+
+  labs(fill = "")
+
+
+seven + theme(
+  panel.grid.major = element_blank(), 
+  panel.grid.minor = element_blank(),
+  plot.title = element_text(face = "bold", size = 12),
+    axis.text.x = element_text(size = 12)
+)
+```
+
+##Defendant Age Summary Statistics 
+```{r}
+#Average and Range of Age
+mean(as.numeric(lightHouse$defendants_arrest_age),na.rm=TRUE)
+range(as.numeric(lightHouse$defendants_arrest_age),na.rm=TRUE)
+
+#OLS model of age by sex versus labor
+mod_age_traff <- lm(defendants_arrest_age ~ sex_labor, data =lightHouse)
+summary(mod_age_traff)
+
+
+#avg. age across trafficking type
+dta <- lightHouse %>%
+  group_by(trafficking_type.x)%>%
+  summarise(
+    avg = mean(as.numeric(defendants_arrest_age),na.rm=TRUE)
+  )
+
+view(dta)
+
+```
+
+##Defendant Age - Format Data
+```{r}
+library(ggridges)
+
+ggplot(data = lightHouse, aes(x = defendants_arrest_age, y = trafficking_type.x, fill = trafficking_type.x)) +
+  geom_density_ridges(alpha = 0.8) +
+  xlim(0,80)+
+  labs(
+    y = "",
+    x = "Number of Defendants",
+    color = "Type of Trafficking",
+    caption = "Defendants older than 80 defendants have been removed for clarity"
+  ) +
+  scale_fill_manual(values=(c("#1957CD", "#0F347B", "#46ADE3", "#1895A7" )))+
+  theme_minimal() + 
+  theme(legend.position = "none",
+    axis.text.x = element_text(size = 12))
+```
+
+##Figure 8 - Defendant Age by Trafficking Type
+```{r}
+
+dta <- lightHouse %>%
+  group_by(trafficking_type.x)%>%
+  summarise(
+    count_m = sum((gender_binary ==1),na.rm = TRUE),
+    count_f = sum((gender_binary ==0),na.rm = TRUE),
+    count = count_m + count_f,
+    Female = count_m/count*100,
+    Male = count_f/count*100
+  )
+
+
+dta$total<-  dta$Female + dta$Male
+
+dta2<-subset(dta, select=c("trafficking_type.x", "total", "Female",
+                           "Male"))
+
+
+dta3 <-melt(dta2, id.vars = c("trafficking_type.x", "total"), variable.name = "victim_type", value.name = "percent_of_victim")
+
+view(dta3)
+
+```
+
+##Defendant Gender Summary Statistics
+```{r}
+table(lightHouse$defendants_gender)
+
+#Number Female
+1097/4584
+
+#Number Male
+3425/4584
+
+#Number Unknown
+62/4584
+
+#Number Companies
+13/4584
+
+#Gender by Trafficking Type
+dta <- lightHouse %>%
+  group_by(trafficking_type.x)%>%
+  summarise(
+    count_m = sum((gender_binary ==1),na.rm = TRUE),
+    count_f = sum((gender_binary ==0),na.rm = TRUE),
+    count = count_m + count_f,
+    Female = count_m/count*100,
+    Male = count_f/count*100
+  )
+
+view(dta)
+```
+
+##Figure 9: Defendant Gender by Type of Trafficking
+```{r}
+#Violin Plot 
+allCase$case_number_victims_female
+ggplot(data = lightHouse, aes(x = trafficking_type.x, y = (1+gender_binary), fill = trafficking_type.x))+
+  geom_violin()+
+  scale_fill_manual(values=(c("#1957CD", "#0F347B", "#46ADE3", "#1895A7" )))+
+  ggtitle("") +
+  theme_minimal() +
+  xlab("") +
+  ylab("")+
+  labs(fill = "")+
+  scale_y_continuous(breaks = c(1, 2), labels = c("Female", "Male"))+
+  theme(axis.text.x = element_text(size = 12))
+```
+
+##Foreign National Defendants Summary Statistics 
+```{r}
+table(lightHouse$def_forg_binary)
+#Number of Foreign Defendants
+1386/(1386+3198)
+
+#Number of US Defendants
+3198/(1386+3198)
+
+#Foreign but Unknown Defendants
+613/(1386+3198)
+
+#Top Countries of origin
+dta <- lightHouse%>%
+  group_by(defendants_country_of_origin)%>%
+  summarise(
+    total=n()
+  )
+
+#view(dta)
+
+#Percent of Whole by Top Countries 
+251/4584
+75/4584
+38/4584
+34/4584
+32/4584
+
+```
+
+##Defendant Nationality - Format Data
+```{r}
+table(allCase$trafficking_type)
+table(lightHouse$def_forg_binary)
+
+
+dta <- lightHouse %>%
+  group_by(trafficking_type.x)%>%
+  summarise(
+    count_us = sum((def_forg_binary ==1),na.rm = TRUE),
+    count_nonus = sum((def_forg_binary ==0),na.rm = TRUE),
+    count = count_us + count_nonus,
+   `US National` = count_us/count*100,
+    `Other Nationality` = count_nonus/count*100
+  )
+
+
+dta$total<-  dta$`US National` + dta$`Other Nationality`
+
+dta2<-subset(dta, select=c("trafficking_type.x", "total", "US National",
+                           "Other Nationality"))
+
+
+dta3 <-melt(dta2, id.vars = c("trafficking_type.x", "total"), variable.name = "victim_type", value.name = "percent_of_victim")
+
+#view(dta3)
+
+
+```
+
+##Figure 10 - Create Stacked Bar Chart of Trafficking Type
+```{r}
+
+table(lightHouse$defendants_country_of_origin)
+
+countries <- c("United States", "Mexico" ,"Korea" , "Thailand", "Ukraine" ,  "China" )
+
+lightHouse$country_simple <- ifelse(!lightHouse$defendants_country_of_origin %in% countries, "Other" , lightHouse$defendants_country_of_origin)
+
+
+table(lightHouse$country_simple)
+
+#Stacked Bar Chart
+ten <- ggplot(data = dta3, aes(x = trafficking_type.x, y = percent_of_victim, fill = victim_type))+
+  geom_bar(position = "stack", stat = "identity")+ 
+  scale_fill_manual(values=(c("#1957CD", "#0F347B" )))+
+  ggtitle("") +
+  theme_minimal() +
+  xlab("") +
+  ylab("Percent Of Whole")+
+  labs(fill = "")
+
+
+ten + theme(
+  panel.grid.major = element_blank(), 
+  panel.grid.minor = element_blank(),
+  plot.title = element_text(face = "bold", size = 12),
+  axis.text.x = element_text(size = 12)
+)
+
+```
+
+##Cross-Analysis of Demographics OLS
+```{r}
+#Race effect on Gender
+mod_race_gender <- glm(gender_binary ~ defendants_race, data=lightHouse, family=binomial())
+summary(mod_race_gender)
+
+#Race effect on Age
+mod_race_age <- lm(defendants_arrest_age ~ defendants_race, data=lightHouse)
+summary(mod_race_age)
+
+#Race effect on Foreign Nationality
+mod_race_forg <- glm(def_forg_binary ~ defendants_race, data=lightHouse, family=binomial())
+summary(mod_race_forg)
+
+#Gender effect on Foreign Nationality
+mod_gender_forg <- glm(def_forg_binary ~ gender_binary, data=lightHouse, family=binomial())
+summary(mod_gender_forg)
+
+```
+
+#Part II - Models
+Models are included with imputation techniques to demonstrate the similarlies between imputed and non-imputed results, these imputed models are not included in the paper 
+
+#Defendant Model
+
+##Model Code + Clustering
+```{r}
+library(lme4)
+library(broom)
+library(broom.mixed)
+
+#Relevel Race as Comparison
+lightHouse$defendants_race <- fct_relevel(lightHouse$defendants_race, "White")
+
+#Create Simplifed Age Variable for best Model Fit
+lightHouse$defendant_age_simple <- round((lightHouse$defendants_arrest_age/10),0)
+
+
+#Model with lme4
+mod_def_glm <- glmer(sex_labor ~ defendants_race + (gender_binary)+defendant_age_simple+ def_forg_binary+(1|state_prosecuted/district_prosecuted), family = binomial(), data = lightHouse, na.action= na.omit)
+
+#Model without District Prosecuted to Compare
+mod_reduced<- glmer(sex_labor ~ defendants_race + defendant_age_simple+gender_binary+ def_forg_binary+(1|state_prosecuted), family = binomial(), data = lightHouse, na.action= na.omit)
+
+# View  results 
+tidy_results <- tidy(mod_def_glm)
+print(tidy_results)
+
+#Explore Variance 
+var_def <- VarCorr(mod_def_glm)
+
+# Likelihood Ratio Test
+summary(mod_def_glm)
+anova(mod_reduced, mod_def_glm)
+
+```
+
+##Calculate Predicted Probabilities
+```{r}
+library(margins)
+
+new_data <- data.frame(
+  defendants_race = "Black",
+  gender_binary = 1,
+  defendant_age_simple = 3.3,
+  def_forg_binary = 1,
+  state_prosecuted = "TX",      
+  district_prosecuted = "Eastern District of Texas"
+)
+
+
+predicted_probability <- predict(mod_def_glm, newdata = new_data, type = "response")
+
+new_data <- data.frame(
+  defendants_race = "White",
+  gender_binary = 1,
+  defendant_age_simple = 3.3,
+  def_forg_binary = 1,
+  state_prosecuted = "TX",      
+  district_prosecuted = "Eastern District of Texas"
+)
+
+
+predicted_probability <- predict(mod_def_glm, newdata = new_data, type = "response")
+
+
+new_data <- data.frame(
+  defendants_race = "Asian",
+  gender_binary = 0,
+  defendant_age_simple = 5,
+  def_forg_binary = 0,
+  state_prosecuted = "TX",      
+  district_prosecuted = "Eastern District of Texas"
+)
+
+
+predicted_probability <- predict(mod_def_glm, newdata = new_data, type = "response")
+
+
+new_data <- data.frame(
+  defendants_race = "White",
+  gender_binary = 0,
+  defendant_age_simple = 4.5,
+  def_forg_binary = 0,
+  state_prosecuted = "TX",      
+  district_prosecuted = "Eastern District of Texas"
+)
+
+
+predicted_probability <- predict(mod_def_glm, newdata = new_data, type = "response")
+
+```
+
+##Model with Imputation
+```{r}
+#Ensure correct comparison catagory
+lightHouse$defendants_race <- fct_relevel(lightHouse$defendants_race, "White")
+
+#Organize Data 
+dta <- lightHouse %>%
+  group_by(defendant_id)%>%
+  summarise(
+    sex_labor = as.numeric(sex_labor),
+    #limitation of mice is that it does not work for character variables, here defendant race is converted to an oridnal factor variable
+    defendant_race = factor(defendants_race),
+    count_male = sum(as.numeric(case_number_victims_male), na.rm = TRUE),
+    count_female = sum(as.numeric(case_number_victims_female), na.rm = TRUE),
+    foreign = sum(as.numeric(case_number_victims_foreign), na.rm = TRUE),
+    count_total_vic = sum(as.numeric(case_number_victims), na.rm = TRUE),
+    percent_minor = coalesce(sum(as.numeric(case_number_victims_minor), na.rm = TRUE), 0) / coalesce(sum(as.numeric(case_number_victims), na.rm = TRUE), 1),
+    num_def = sum(as.numeric(case_number_defendants), na.rm = TRUE),
+    percent_male = count_male / (count_male + count_female),
+    percent_foregin = foreign / count_total_vic,
+    gender_binary = ifelse(defendants_gender == "Male",1,
+                           ifelse(defendants_gender == "Female",0,NA)),
+    def_forg_binary = ifelse(defendants_country_of_origin == "United States",1,0),
+    year = as.numeric(case_year)
+  ) 
+
+#Impute using mice
+all_imputed <- mice(dta, m=5)
+imputed_data <- complete(all_imputed, 1) 
+imputed_data$state <- lightHouse$state_prosecuted
+imputed_data$district <- lightHouse$district_prosecuted
+imputed_data$sex_labor <- lightHouse$sex_labor
+imputed_data$case <- lightHouse$case_id
+
+#Model with Imputed Data
+mod_def_glm <- glmer(sex_labor ~ defendants_race + (gender_binary)+defendant_age_simple+ def_forg_binary+(1|state_prosecuted/district_prosecuted), family = binomial(), data = lightHouse, na.action= na.omit)
+
+
+#View Results
+tidy_results <- tidy(mod_def_glm)
+print(tidy_results)
+
+```
+
+#Case Level Model
+
+##No-Imputation Model Code + Clustering
+```{r}
+library(tidyverse)
+library(stargazer)
+library(broom.mixed)
+library(broom)
+library(nlme)
+library(MASS)
+library(lme4)
+library(missMethods)
+
+#Organize Data
+case_dta <- allCase %>%
+  group_by(case_id) %>%
+  summarise(
+    count_male = sum(as.numeric(case_number_victims_male), na.rm = TRUE),
+    count_female = sum(as.numeric(case_number_victims_female), na.rm = TRUE),
+    foreign = sum(as.numeric(case_number_victims_foreign), na.rm = TRUE),
+    count_total_vic = sum(as.numeric(case_number_victims), na.rm = TRUE),
+    percent_minor = coalesce(sum(as.numeric(case_number_victims_minor), na.rm = TRUE), 0) / coalesce(sum(as.numeric(case_number_victims), na.rm = TRUE), 1),
+    num_def = sum(as.numeric(case_number_defendants), na.rm = TRUE),
+    percent_male = count_male / (count_male + count_female),
+    percent_foregin = foreign / count_total_vic,
+    state_prosecuted = state_prosecuted,
+    district_prosecuted = district_prosecuted,
+    sex_labor = sex_labor
+  )
+
+case_dta$percent_minor <- ifelse(case_dta$percent_minor > 1,1,case_dta$percent_minor)
+# Fit the model
+mod_case <- glmer(sex_labor ~ percent_male + percent_foregin + (count_total_vic) + percent_minor + (num_def)+ (1|state_prosecuted/district_prosecuted), data = case_dta, na.action = na.omit, family = binomial())
+summary(mod_case)
+table(case_dta$sex_labor)
+
+mod_reduced<- glmer(sex_labor ~ percent_male + percent_foregin + log(count_total_vic) + percent_minor + log(num_def)+ (1|state_prosecuted), data = case_dta, na.action = na.omit, family = binomial())
+
+anova(mod_case, mod_reduced)
+# View  results 
+tidy_results <- tidy(mod_case)
+print(tidy_results)
+
+# Create a dataframe with fitted and residual values
+plot_data <- data.frame(
+  Fitted = fitted(mod_case),
+  Residuals = residuals(mod_case)
+)
+
+view(plot_data)
+# Plot fitted vs. residuals
+library(ggplot2)
+
+ggplot(plot_data, aes(x = Fitted, y = Residuals)) +
+  geom_point() +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  labs(title = "Fitted vs Residuals",
+       x = "Fitted Values",
+       y = "Residuals") +
+  theme_minimal()
+
+plot(na.omit(case_dta$case_total_vic), plot_data$Residuals) 
+
+case_dta <- na.omit(case_dta)
+case_dta$residuals <- residuals(mod_case)
+
+# Plot residuals vs. count_total_vic
+ggplot(case_dta, aes(x = num_def, y = residuals, color = sex_labor)) +
+  geom_point() +
+  geom_jitter()+
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  labs(title = "Residual Plot",
+       y = "Residuals")
+
+
+ggplot(case_dta, aes(x = sex_labor, y = count_total_vic)) +
+  geom_point() +
+  geom_jitter()+
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  labs(title = "Residual Plot",
+       x = "count_total_vic",
+       y = "Residuals")
+
+
+
+```
+
+##Calculate Predictive Probabilities
+```{r}
+new_data <- data.frame(
+  percent_male = .50,     
+  percent_foregin = .5, 
+  count_total_vic = 5.1,
+  percent_minor = .50,
+  num_def =  1.92,
+  state_prosecuted = "TX",      
+  district_prosecuted = "Eastern District of Texas"
+)
+
+
+# Generate predicted probabilities
+predicted_probs <- predict(mod_case, newdata = new_data, type = "response")
+
+
+
+new_data <- data.frame(
+  percent_male = 1,     
+  percent_foregin = 1, 
+  count_total_vic = mean(as.numeric(allCase$case_number_victims), na.rm=TRUE),
+  percent_minor = 0,
+  num_def = mean(allCase$case_number_defendants),
+  state_prosecuted = "TX",      
+  district_prosecuted = "Eastern District of Texas"
+)
+
+
+# Generate predicted probabilities
+predicted_probs <- predict(mod_case, newdata = new_data, type = "response")
+
+
+```
+
+##Imputate and Rerun
+```{r}
+#Subset Data
+dta <- case_dta[, c("sex_labor", "percent_male", "percent_foregin", "count_total_vic", 
+                                "percent_minor", "num_def")]
+
+#Impute using mice
+all_imputed <- mice(dta, m=5)
+imputed_data <- complete(all_imputed, 1) 
+imputed_data$state <- allCase$state_prosecuted
+imputed_data$district <- allCase$district_prosecuted
+imputed_data$sex_labor <- allCase$sex_labor
+imputed_data$case <- allCase$case_id
+
+#Model with imputed data
+mod_case <- glmer(sex_labor ~ percent_male + percent_foregin + count_total_vic + percent_minor + num_def+ (1|state/district), data = imputed_data, na.action = na.omit, family = binomial())
+summary(mod_case)
+
+
+# View  results 
+tidy_results <- tidy(mod_case)
+print(tidy_results)
+```
+
+#Online Appendix
+
+##Figure 1: Predicted Probabilities of Foreign Nationals
+```{r}
+# Load necessary libraries
+library(ggeffects)
+library(ggplot2)
+
+# Predictor 1: def_forg_binary
+predicted_def_forg_binary <- ggpredict(mod_def_glm, terms = "def_forg_binary")
+
+#Chart
+foreign <- ggplot(data = predicted_def_forg_binary, aes(x = factor(x), y = predicted)) +
+  geom_bar(stat = "identity", position = "dodge",fill= "#1967CD") +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high))+
+  labs(
+    x = "",
+    y = "Defendant Predicted Likihood of Sex Trafficking")+
+    scale_x_discrete(labels = c("Foreign National", "US National")) +
+  theme_minimal()
+
+foreign + theme(
+  panel.grid.major = element_blank(), 
+  panel.grid.minor = element_blank(),
+  plot.title = element_text(face = "bold", size = 12)
+)
+
+```
+
+##Figure 2: Predicted Probabilites of Def. Age
+```{r}
+# Predictor 3: defendant_age_simple
+predicted_defendant_age_simple <- ggpredict(mod_def_glm, terms = "defendant_age_simple")
+plot(predicted_defendant_age_simple)+
+  labs(
+    x = "Age by Decade",
+    y = "Defendant Predicted Likihood of Sex Trafficking",
+    title = ""
+  )
+```
+
+##Figures 3-5 Predictive Probabilities Charts
+```{r}
+library(ggeffects)
+
+# Generate predicted probabilities for the percent_male predictor
+predicted_effect <- ggpredict(mod_case, terms = "percent_male")
+
+
+plot(predicted_effect)+
+  labs(
+    x = "Percent of Male Victims",
+    y = "Case Predicted Likihood of Being Sex Trafficking",
+    title = ""
+  )
+
+# Predictor 2: percent_foregin
+predicted_percent_foregin <- ggpredict(mod_case, terms = "percent_foregin")
+plot(predicted_percent_foregin) +
+  labs(
+    x = "Percent of Foreign Victims",
+    y = "Case Predicted Likihood of Being Sex Trafficking",
+    title = ""
+  )
+
+
+# Predictor 4: percent_minor
+predicted_percent_minor <- ggpredict(mod_case, terms = "percent_minor")
+plot(predicted_percent_minor)+
+  labs(
+    x = "Percent of Minor Victims",
+    y = "Case Predicted Likihood of Being Sex Trafficking",
+    title = ""
+  )
+
+table(case_dta$percent_minor)
+```
+
+
