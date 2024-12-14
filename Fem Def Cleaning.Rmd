@@ -1,0 +1,367 @@
+---
+title: "Fem Def Cleaning"
+output:
+  pdf_document: default
+  html_notebook: default
+  html_document:
+    df_print: paged
+  word_document: default
+---
+
+Female Defendents Cleaning Sheet 
+
+
+#Step 1 - Read in Data, make sure to change wd to yours 
+
+#all inquiries for data access can be directed to sarahsowell1@icloud.com
+
+#Create Numeric and Charater value of Clean Typology
+```{r}
+
+femDef <- read.csv("Final Female Defendants - FEMALE DEFENDANTS.csv")
+case <- read.csv("htd-normalized-cases_2024-06-14-16-06-02.csv")
+
+#Rename Variable
+femDef$typology <- femDef$FD.typology..CEO..Partner...Bottom..Manager..Associate...Victim...None..NEI
+
+#Clean two cases of unclear coding
+femDef$typology <- ifelse(femDef$typology == "NEI/ Victim", "NEI", femDef$typology)
+
+
+femDef$typology <- ifelse(femDef$typology == "", "NEI", femDef$typology)
+
+table(femDef$typology)
+
+#Clean Text entries, double checking for mistyping. This creates a numeric and charater value
+##Typoloy clean -> numeric :: Typoloy name :: charater
+
+
+
+femDef$typologyClean <- ifelse(femDef$typology == "Victim",0, -999)
+
+femDef$typologyClean <- ifelse(femDef$typology == "NEI/ Victim ", -999,femDef$typologyClean )
+
+femDef$typologyName <- ifelse(femDef$typology == "Victim", "1. Victim", NA)
+
+femDef$typologyClean <- ifelse(femDef$typology == "Manager",1, femDef$typologyClean)
+
+femDef$typologyName <- ifelse(femDef$typology == "Manager", "1. Manager", femDef$typologyName)
+
+femDef$typologyClean <- ifelse(femDef$typology == "Bottom",2, femDef$typologyClean)
+
+femDef$typologyName <- ifelse(femDef$typology == "Bottom", "2. Bottom", femDef$typologyName)
+
+femDef$typologyClean <- ifelse(femDef$typology == "Associate",3, femDef$typologyClean)
+
+femDef$typologyName <- ifelse(femDef$typology == "Associate", "3. Associate", femDef$typologyName)
+
+femDef$typologyClean <- ifelse(femDef$typology == "Partner",4, femDef$typologyClean)
+
+femDef$typologyName <- ifelse(femDef$typology == "Partner", "4. Partner", femDef$typologyName)
+
+
+femDef$typologyClean <- ifelse(femDef$typology == "NEI",-999, femDef$typologyClean)
+
+
+femDef$typologyClean <- ifelse(femDef$typology == "Other",-888, femDef$typologyClean)
+
+
+femDef$typologyClean <- ifelse(femDef$typology == "None",-888, femDef$typologyClean)
+
+
+femDef$typologyClean <- ifelse(femDef$typology == "CEO",5, femDef$typologyClean)
+
+femDef$typologyName <- ifelse(femDef$typology == "CEO", "5. CEO", femDef$typologyName)
+
+
+table(femDef$typologyClean)
+table(femDef$typologyName)
+```
+
+
+
+Clean Race Variable, grouping Native American and Indian into Other & Create Race Name 
+```{r}
+
+femDef$raceNew <- ifelse(femDef$race == "Native American", "Other", femDef$race)
+
+femDef$raceNew <- ifelse(femDef$race == "Indian", "Other", femDef$raceNew)
+
+femDef$raceNew <- ifelse(femDef$race == "", "Unknown", femDef$raceNew)
+
+table(femDef$raceNew)
+
+femDef$raceName <- ifelse(femDef$race=="White","1. White", femDef$race)
+femDef$raceName <- ifelse(femDef$race=="Asian","2. Asian", femDef$raceName)
+femDef$raceName <- ifelse(femDef$race=="Hispanic","3. Hispanic", femDef$raceName)
+femDef$raceName <- ifelse(femDef$race=="Black","4. Black", femDef$raceName)
+femDef$raceName <- ifelse(femDef$race=="Unknown","6. Unknown", femDef$raceName)
+femDef$raceName <- ifelse(femDef$race=="Other","5. Other", femDef$raceName)
+
+
+```
+
+
+#Create a secondary, simplified Race Variable for modeling
+```{r}
+
+femDef$raceNew1 <- ifelse(femDef$raceNew == 'Asian', 'Other', femDef$raceNew)
+
+femDef$raceNew1 <- ifelse(femDef$raceNew == 'Hispanic', 'Other', femDef$raceNew1)
+
+femDef$raceNew1 <- ifelse(femDef$raceNew == 'Unknown', NA, femDef$raceNew1)
+
+```
+
+
+Create a dummy variable of if a person is a victim or victim-offender
+```{r}
+
+femDef$victimDummy <- ifelse(femDef$typologyClean >= 3, 1, 0)
+femDef$victimDummyName <- ifelse(femDef$typologyClean >= 3, "Victim", "Not Victim")
+table(femDef$victimDummyName)
+
+```
+
+Clean Age and Year Variable
+```{r}
+##Age
+femDef$arrest_age <- ifelse(femDef$arrest_age >= 18, femDef$arrest_age, NA)
+table(femDef$arrest_age)
+
+##Year
+femDef$year <- format(as.Date(femDef$charge_date, format="%Y-%m-%d"),"%Y")
+table(femDef$year)
+```
+
+
+
+Combined Defendent Level Data with Case Level Data 
+```{r}
+
+library(dplyr)
+femDefmerge <- femDef
+table(femDef$case_id)
+
+femDefmerge$case_id <- as.integer(femDef$Case_id)
+case$case_id <- as.integer(case$case_id)
+
+merge <- left_join(
+  femDefmerge,
+  case,
+  by = "case_id",
+  copy = TRUE, 
+  suffix = c(".x", ".y"),
+  multiple = "all"
+)
+
+
+names(merge)
+
+```
+
+#Create Binary Variable of Crimes Including a Minor
+```{r}
+
+femDef <- data.frame(merge)
+
+table(femDef$minor_sex)
+
+femDef$minor_catagorical <- ifelse(femDef$minor_sex == 'true', 1, 0)
+
+femDef$minor_catagorical <- ifelse(femDef$minor_sex == 'true' & femDef$adult_sex == 'true', 2, femDef$minor_catagorical)
+
+table(femDef$minor_catagorical)
+```
+
+#Create a Catagorical Variable of Minor Trafficking
+```{r}
+
+
+
+femDef$minorNice <- ifelse(femDef$minor_catagorical == 2, "Adult Victims Only", femDef$minor_catagorical)
+
+
+femDef$minorNice <- ifelse(femDef$minor_catagorical == 1, "Adult & Minor Victims", femDef$minorNice)
+
+
+femDef$minorNice <- ifelse(femDef$minor_catagorical == 0, "Minor Victims Only", femDef$minorNice)
+
+class(femDef)
+
+
+```
+
+
+#Use regular expression to create binary variables of control methods
+```{r}
+library(stringr)
+
+
+
+
+##Create Binary Variables for All Method of Control
+femDef$control <- femDef$Method.of.Control...Caretaking...Verbal.threats...Physical.violence...Drugs.Alcohol...Withhold.something.of.value...Isolation....N.A....Other...Unknown
+
+femDef$caretaking_binary <- as.integer(str_detect(femDef$control, regex("caretaking", ignore_case =  TRUE)))
+table(femDef$caretaking_binary)
+
+femDef$verb_binary <- as.integer(str_detect(femDef$control, regex("Verbal[:blank:]Threats", ignore_case =  TRUE)))
+table(femDef$verb_binary)
+
+femDef$physV_binary <- as.integer(str_detect(femDef$control, regex("Physical[:blank:]Violence", ignore_case =  TRUE)))
+table(femDef$physV_binary)
+
+femDef$drugs_binary<- as.integer(str_detect(femDef$control, regex("Drugs/Alcohol", ignore_case =  TRUE)))
+table(femDef$drugs_binary)
+
+femDef$witholdVal_binary<- as.integer(str_detect(femDef$control, regex("withhold[:blank:]something", ignore_case =  TRUE)))
+table(femDef$witholdVal_binary)
+
+femDef$isolation_binary<- as.integer(str_detect(femDef$control, regex("isolation", ignore_case =  TRUE)))
+table(femDef$isolation_binary)
+
+
+##Create Binary Variables of Administrator
+
+femDef$admin <- femDef$Administration...Recruit...Train...Organize.buyer.engagements...Enforce...Handle.money..inc..posting.bonds....Personal.care..shopping..hair..etc.
+
+femDef$recruit_binary <- as.integer(str_detect(femDef$admin, regex("recruit", ignore_case= TRUE)))
+table(femDef$recruit_binary)
+
+femDef$train_binary <- as.integer(str_detect(femDef$admin, regex("train", ignore_case= TRUE)))
+table(femDef$train_binary)
+
+femDef$organize_binary <- as.integer(str_detect(femDef$admin, regex("organize[:blank:]buyer", ignore_case= TRUE)))
+table(femDef$organize_binary)
+
+femDef$enforce_binary <- as.integer(str_detect(femDef$admin, regex("enforce", ignore_case= TRUE)))
+table(femDef$train_binary)
+
+femDef$money_binary <- as.integer(str_detect(femDef$admin, regex("handle[:blank:]money", ignore_case= TRUE)))
+table(femDef$money_binary)
+
+femDef$care_binary <- as.integer(str_detect(femDef$admin, regex("personal[:blank:]care", ignore_case= TRUE)))
+table(femDef$care_binary)
+
+
+#Create Binary Variable of Trafficker
+
+femDef$trafficker <- ifelse(femDef$Trafficker.Yes.No.Unknown == 'Unknown', NA, 0)
+
+femDef$trafficker <- ifelse(femDef$Trafficker.Yes.No.Unknown == 'Yes', 1, femDef$trafficker)
+
+table(femDef$trafficker)
+
+#Create Binary Variable of Prostitution
+
+femDef$prostitution <- ifelse(femDef$Prostitution.Yes.No..Unknown == 'Unknown', NA, 0)
+
+femDef$prostitution <- ifelse(femDef$Prostitution.Yes.No..Unknown == 'Yes', 1, femDef$prostitution)
+
+table(femDef$prostitution)
+
+#Create Binary of Family Relationships
+femDef$Relationship.to.victims..Not.Family.Family <-  str_replace(femDef$Relationship.to.victims..Not.Family.Family, regex("not family", ignore_case = TRUE), "not")
+
+femDef$family_binary <- as.integer(str_detect(femDef$Relationship.to.victims..Not.Family.Family, regex("family", ignore_case= TRUE)))
+
+table(femDef$family_binary)
+
+```
+
+#Clean Up Sex by Assigning Names and Grouping Smaller Catagories
+```{r}
+
+table(femDef$type_of_sex)
+
+femDef$type_of_sex1 <- ifelse(femDef$type_of_sex == "Other", "Other",femDef$type_of_sex)
+
+femDef$type_of_sex1 <- ifelse(femDef$type_of_sex == "Bars & Cantinas", "Other",femDef$type_of_sex1)
+
+femDef$type_of_sex1 <- ifelse(femDef$type_of_sex == "Escort Services", "Other",femDef$type_of_sex1)
+
+femDef$type_of_sex1 <- ifelse(femDef$type_of_sex == "Pornography", "Other",femDef$type_of_sex1)
+
+femDef$type_of_sex1 <- ifelse(femDef$type_of_sex == "Unknown", NA ,femDef$type_of_sex1)
+
+femDef$type_of_sex1 <- ifelse(femDef$type_of_sex == "", NA ,femDef$type_of_sex1)
+
+femDef$type_of_sex1 <- ifelse(femDef$type_of_sex == "Personal Sexual Servitude", "Other" ,femDef$type_of_sex1)
+
+femDef$type_of_sex1 <- ifelse(femDef$type_of_sex == "Illicit Massage Business", "Other" ,femDef$type_of_sex1)
+
+femDef$type_of_sex1 <- ifelse(femDef$type_of_sex == "Strip Club", "Other" ,femDef$type_of_sex1)
+
+table(femDef$type_of_sex1)
+
+
+```
+
+
+##Create Dummy Variables for Trafficking Type
+```{r}
+
+femDef$online_dummy <- ifelse(femDef$type_of_sex == "Online Solicitation", "Online Solicitation","Other")
+table(femDef$online_dummy)
+
+femDef$outdoor_dummy <- ifelse(femDef$type_of_sex == "Outdoor Solicitation", "Outdoor Solicitation","Other")
+table(femDef$outdoor_dummy)
+
+femDef$brothel_dummy <- ifelse(femDef$type_of_sex == "Brothel", "Brothel","Other")
+table(femDef$brothel_dummy)
+
+```
+
+
+```{r}
+##Create Forgien National Variable
+
+
+femDef$forgNat <- ifelse(femDef$number_victims_foreign > 0, 1, 0)
+
+```
+
+#Create Catagorical Age Groupings
+```{r}
+
+categorize_age <- function(age) {
+  if (!is.na(age)) {
+    if (age >= 18 & age <= 23) {
+      group <- "18-23"
+    } else if (age >= 24 & age <= 29) {
+      group <- "24-29"
+    } else if (age >= 30 & age <= 34) {
+      group <- "30-34"
+    } else if (age >= 35 & age <= 39) {
+      group <- "35-39"
+    } else {
+      group <- "40+"
+    }
+    return(group)
+  } else {
+    return(NA)  # If age is missing, return NA
+  }
+}
+
+# Add age group variable to femDef dataset
+ageCount <- femDef %>%
+  mutate(ageGroup = sapply(arrest_age, categorize_age))
+
+table(ageCount$ageGroup)
+```
+
+
+
+#Download Clean Data
+```{r}
+#Remove blank rows
+femDef1 <- subset(femDef, !is.na(femDef$Case_id))
+
+#Remove Victim Catagory
+femDef1 <- subset(femDef, (femDef$typologyName != "1. Victim"))
+view(femDef1)
+femDefClean <- write.csv(femDef1, "femDefClean5.csv")
+
+```
+
