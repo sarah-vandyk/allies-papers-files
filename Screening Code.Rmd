@@ -1,0 +1,512 @@
+---
+title: "Screening TX/LA"
+output: html_document
+date: "2025-03-31"
+---
+
+#Install Data and Load Needed Packages
+```{r}
+set.seed(100)
+#Load Packages
+library(tidyverse)
+library(haven)
+library(gt)
+library(sandwich)
+library(lmtest)
+library(stargazer)
+library(igraph)
+library(usethis)
+
+#Load Data
+rm(list = ls())
+setwd("~/Library/CloudStorage/Box-Box/Allies")
+screening <- read.csv("merged_data.csv")
+
+```
+
+
+
+
+#Exploring X,M,Y  - Cleaning 
+```{r}
+# For ACES index - only calculate for rows with complete data on ACES variables
+aces_vars <- c("one_c_homeless", "one_e_supervision", "two_b_physicalabuse", 
+               "two_c_emotionalabuse", "two_a_secabuse", "three_f_nutrition", 
+               "two_d_violence")
+
+screening <- screening %>%
+  mutate(index_aces = ifelse(complete.cases(select(., all_of(aces_vars))),
+                            rowSums(select(., all_of(aces_vars)) == 2),
+                            NA))
+
+# For response index - only calculate for rows with complete data on response variables
+response_vars <- c("one_a_running", "one_f_school", "three_g_sud", 
+                   "four_a_risksex", "five_a_unhealthyrel", "six_c_risktaking")
+
+screening <- screening %>%
+  mutate(index_response = ifelse(complete.cases(select(., all_of(response_vars))),
+                                rowSums(select(., all_of(response_vars)) == 2),
+                                NA))
+#ACE recode
+table(screening$one_c_homeless)
+screening$one_c_homeless_bin <- ifelse(screening$one_c_homeless == 2,1,0)
+screening$one_e_supervision_bin <- ifelse(screening$one_e_supervision == 2,1,0)
+screening$two_b_physicalabuse_bin <- ifelse(screening$two_b_physicalabuse == 2,1,0)
+screening$two_c_emotionalabuse_bin <- ifelse(screening$two_c_emotionalabuse == 2,1,0)
+screening$two_a_secabuse_bin <- ifelse(screening$two_a_secabuse == 2,1,0)
+screening$three_f_nutrition_bin <- ifelse(screening$three_f_nutrition == 2,1,0)
+screening$two_d_violence_bin <- ifelse(screening$two_d_violence == 2,1,0)
+
+#Response recode
+screening$one_a_running_bin <- ifelse(screening$one_a_running == 2,1,0)
+screening$one_f_school_bin <- ifelse(screening$one_f_school == 2,1,0)
+screening$three_g_sud_bin <- ifelse(screening$three_g_sud == 2,1,0)
+screening$four_a_risksex_bin <- ifelse(screening$four_a_risksex == 2,1,0)
+screening$five_a_unhealthyrel_bin <- ifelse(screening$five_a_unhealthyrel == 2,1,0)
+screening$one_f_school <- ifelse(screening$one_f_school == 2,1,0)
+screening$six_c_risktaking_bin <- ifelse(screening$six_c_risktaking == 2,1,0)
+
+```
+
+#Create DV
+```{r}
+screening$clear_concern <- ifelse(screening$calc_cseitscore == "Clear Concern", 1,0)
+table(screening$calc_cseitscore)
+table(screening$calc_cseitscore)
+#view(screening$calc_cseitscore)
+sum(is.na(screening$calc_cseitscore))
+head(screening$calc_cseitscore)
+```
+
+
+#Demographic variables cleaning
+```{r}
+
+library(dplyr)
+library(forcats)
+
+# Drop age categories that are too small
+screening <- screening %>%
+  mutate(
+    age_bin = ifelse(age_bin %in% c("0-9", "19-24", "25+"), NA, age_bin)
+  )
+
+# Create relevant subsets
+jj_dta <- screening %>%
+  filter(agency_type_recoded == "JPD", state_location != "LA")
+
+cps_dta <- screening %>%
+  filter(agency_type_recoded == "DFPS")
+
+# Convert to character
+convert_to_char <- function(df) {
+  df %>%
+    mutate(
+      race_recode = as.character(race_recode),
+      age_bin = as.character(age_bin),
+      b_gender = as.character(b_gender)
+    )
+}
+
+jj_dta <- convert_to_char(jj_dta)
+cps_dta <- convert_to_char(cps_dta)
+
+# Clean JJ unknown values
+jj_dta <- jj_dta %>%
+  mutate(
+    b_gender = ifelse(tolower(b_gender) %in% c("unknown", "other"), NA, b_gender),
+    race_recode = case_when(
+      tolower(race_recode) %in% c("unknown", "other", "null", "", 
+                                  "native hawaiian or other pacific islander",
+                                  "asian", "multiracial",
+                                  "american indian or alaska native") ~ "Other/Unknown",
+      TRUE ~ race_recode
+    )
+  )
+
+# Clean CPS unknown values
+cps_dta <- cps_dta %>%
+  mutate(
+    b_gender = ifelse(tolower(b_gender) == "unknown", NA, b_gender),
+    race_recode = case_when(
+      tolower(race_recode) %in% c("unknown", "null", "", "other", 
+                                  "american indian or alaska native",
+                                  "asian", "multiracial") ~ "Other/Unknown",
+      TRUE ~ race_recode
+    )
+  )
+
+# Filter to only complete cases on the four key variables
+jj_dta <- jj_dta %>%
+  filter(!is.na(clear_concern), !is.na(race_recode), !is.na(b_gender), !is.na(age_bin))
+
+cps_dta <- cps_dta %>%
+  filter(!is.na(clear_concern), !is.na(race_recode), !is.na(b_gender), !is.na(age_bin))
+
+# Relevel factors
+jj_dta <- jj_dta %>%
+  mutate(
+    race_recode = fct_relevel(factor(race_recode), "White or Caucasian"),
+    age_bin = fct_relevel(factor(age_bin), "15-16")
+  )
+
+cps_dta <- cps_dta %>%
+  mutate(
+    race_recode = fct_relevel(factor(race_recode), "White or Caucasian"),
+    age_bin = fct_relevel(factor(age_bin), "15-16")
+  )
+
+
+# Check output
+table(jj_dta$race_recode)
+table(cps_dta$race_recode)
+print(cps_dta$race_recode)
+table(cps_dta$b_gender)
+```
+#Descriptive statistics
+```{r}
+#Total Obs
+nrow(jj_dta)
+nrow(cps_dta)
+
+#Clear Concern
+round(prop.table(table(jj_dta$clear_concern)), 2)
+round(prop.table(table(cps_dta$clear_concern)), 2)
+
+#Race
+round(prop.table(table(jj_dta$race_recode)), 2)
+round(prop.table(table(cps_dta$race_recode)), 2)
+
+#Gender
+round(prop.table(table(jj_dta$b_gender)), 2)
+round(prop.table(table(cps_dta$b_gender)), 2)
+
+#Age
+round(prop.table(table(jj_dta$age_bin)), 2)
+round(prop.table(table(cps_dta$age_bin)), 2)
+```
+
+
+
+#Model 1 - Individual Aces
+```{r}
+##CPS
+out_model <- glm(clear_concern ~ one_c_homeless_bin + one_e_supervision_bin + two_a_secabuse_bin + two_b_physicalabuse_bin + two_c_emotionalabuse_bin + two_d_violence_bin + three_f_nutrition_bin
+                 + factor(race_recode) + age_bin + b_gender, data = cps_dta, family=binomial())
+
+stargazer(out_model, type="text")
+#stargazer(out_model, type = "html", out = "regression_output.html")
+
+##JJ
+out_model2 <- glm(clear_concern ~ one_c_homeless_bin + one_e_supervision_bin + two_a_secabuse_bin + two_b_physicalabuse_bin + two_c_emotionalabuse_bin + two_d_violence_bin + three_f_nutrition_bin
+                 + factor(race_recode) + age_bin + b_gender, data = jj_dta, family=binomial())
+stargazer(out_model2, type="text")
+
+#stargazer(out_model, out_model2, type = "html", out = "regression_output.html")
+
+stargazer(out_model, out_model2, type = "text")
+prop.table(table(jj_dta$one_c_homeless_bin))
+```
+
+##Model 1a - ACEs Index & Clear Concern
+```{r}
+##CPS
+out_model <- glm(clear_concern ~ index_aces
+                 + factor(race_recode) + age_bin + b_gender, data = cps_dta, family=binomial())
+
+stargazer(out_model, type="text")
+##JJ
+out_model2 <- glm(clear_concern ~ index_aces
+                 + factor(race_recode) + age_bin + b_gender, data = jj_dta, family=binomial())
+stargazer(out_model2, type="text")
+```
+
+
+
+#Model 2 - Disordered Conduct
+```{r}
+table(screening$five_a_unhealthyrel_bin, screening$four_a_risksex_bin)
+##CPS
+out_model <- glm(clear_concern ~ one_a_running_bin + one_f_school+three_g_sud_bin + four_a_risksex_bin + five_a_unhealthyrel_bin + six_c_risktaking_bin 
+                 + factor(race_recode) + age_bin + b_gender, data = cps_dta, family=binomial())
+
+stargazer(out_model, type="text")
+
+##JJ
+out_model2 <- glm(clear_concern ~ one_a_running_bin+one_f_school + three_g_sud_bin + four_a_risksex_bin + five_a_unhealthyrel_bin + six_c_risktaking_bin 
+                 + factor(race_recode) + age_bin + b_gender, data = jj_dta, family=binomial())
+
+stargazer(out_model2, type="text")
+
+#stargazer(out_model, out_model2, type = "html", out = "regression_output_response.html")
+
+```
+
+##Model 2a - Disorder conduct index model 
+```{r}
+##CPS
+out_model <- glm(clear_concern ~ index_response
+                 + factor(race_recode) + age_bin + b_gender, data = cps_dta, family=binomial())
+
+stargazer(out_model, type="text")
+##JJ
+out_model2 <- glm(clear_concern ~ index_response
+                 + factor(race_recode) + age_bin + b_gender, data = jj_dta, family=binomial())
+stargazer(out_model2, type="text")
+```
+
+
+#Model 3a - Mediation Model based on behaviors -JJ
+```{r}
+table(cps_dta$race_recode)
+med_model <- lm(index_response ~ index_aces + race_recode + age_bin + b_gender, data =  jj_dta)
+summary(med_model)
+stargazer(med_model, type="text")
+
+# Step 2: Fit the outcome model
+out_model <- glm(clear_concern ~ index_aces + index_response + race_recode + age_bin + b_gender, data = jj_dta, family=binomial())
+stargazer(out_model, type="text")
+
+car::linearHypothesis(out_modeldel, "Z - X > 0", alternative = "greater")
+# Step 3: Conduct mediation analysis
+library(mediation)
+med_results <- mediate(
+  model.m = med_model,
+  model.y = out_model,
+  treat = "index_aces",
+  mediator = "index_response",
+  boot = TRUE,
+  sims = 1000,
+  
+)
+
+summary(med_results)
+
+# Extract standard errors for all mediation effects
+acme_control_se <- sd(med_results$d0.sims)           # ACME (control)
+acme_treated_se <- sd(med_results$d1.sims)           # ACME (treated)
+ade_control_se <- sd(med_results$z0.sims)            # ADE (control)
+ade_treated_se <- sd(med_results$z1.sims)            # ADE (treated)
+total_effect_se <- sd(med_results$tau.sims)          # Total Effect
+prop_control_se <- sd(med_results$n0.sims)           # Prop. Mediated (control)
+prop_treated_se <- sd(med_results$n1.sims)           # Prop. Mediated (treated)
+
+# For average effects, calculate SE from average of bootstrap samples
+acme_avg_se <- sd((med_results$d0.sims + med_results$d1.sims)/2)    # ACME (average)
+ade_avg_se <- sd((med_results$z0.sims + med_results$z1.sims)/2)     # ADE (average)
+prop_avg_se <- sd((med_results$n0.sims + med_results$n1.sims)/2)    # Prop. Mediated (average)
+
+# Create comprehensive results table with rounding to 3 decimal places
+results_table <- data.frame(
+  Effect = c("ACME (control)", "ACME (treated)", "ADE (control)", "ADE (treated)",
+             "Total Effect", "Prop. Mediated (control)", "Prop. Mediated (treated)",
+             "ACME (average)", "ADE (average)", "Prop. Mediated (average)"),
+  Estimate = round(c(med_results$d0, med_results$d1, med_results$z0, med_results$z1,
+                     med_results$tau.coef, med_results$n0, med_results$n1,
+                     mean(c(med_results$d0, med_results$d1)),
+                     mean(c(med_results$z0, med_results$z1)),
+                     mean(c(med_results$n0, med_results$n1))), 3),
+  SE = round(c(acme_control_se, acme_treated_se, ade_control_se, ade_treated_se,
+               total_effect_se, prop_control_se, prop_treated_se,
+               acme_avg_se, ade_avg_se, prop_avg_se), 3)
+)
+
+print(results_table)
+
+```
+
+```{r}
+library(cocor)
+
+# Calculate correlations
+r_xy <- cor(jj_dta$index_aces, jj_dta$index_response, use="complete.obs")
+r_zy <- cor(jj_dta$index_response, jj_dta$clear_concern, use="complete.obs")
+r_xz <- cor(jj_dta$index_aces, jj_dta$index_response, use="complete.obs")  # Need this for Steiger's test
+n <- length(jj_dta$index_response)
+
+# Steiger's test: Is r(Z,Y) significantly larger than r(X,Y)?
+result <- cocor.dep.groups.overlap(r.jk = r_xy,    # correlation X,Y
+                                   r.jh = r_zy,    # correlation Z,Y  
+                                   r.kh = r_xz,    # correlation X,Z
+                                   n = n,
+                                   alternative = "greater",  # one-tailed
+                                   test = "steiger1980")
+print(result)
+
+# Calculate correlations
+r_xy <- cor(cps_dta$index_aces, cps_dta$index_response, use="complete.obs")
+r_zy <- cor(cps_dta$index_response, cps_dta$clear_concern, use="complete.obs")
+r_xz <- cor(cps_dta$index_aces, cps_dta$index_response, use="complete.obs")  # Need this for Steiger's test
+n <- length(cps_dta$index_response)
+
+# Steiger's test: Is r(Z,Y) significantly larger than r(X,Y)?
+result <- cocor.dep.groups.overlap(r.jk = r_xy,    # correlation X,Y
+                                   r.jh = r_zy,    # correlation Z,Y  
+                                   r.kh = r_xz,    # correlation X,Z
+                                   n = n,
+                                   alternative = "greater",  # one-tailed
+                                   test = "steiger1980")
+print(result)
+```
+
+##Model 3b - Mediation - CPS
+```{r}
+
+table(cps_dta$race_recode)
+med_model <- lm(index_response ~ index_aces + race_recode + age_bin + b_gender, data =  cps_dta)
+summary(med_model)
+stargazer(med_model, type="text")
+# Step 2: Fit the outcome model
+out_model <- glm(clear_concern ~ index_aces + index_response + race_recode + age_bin + b_gender, data = cps_dta, family=binomial())
+stargazer(out_model, type="text")
+# Step 3: Conduct mediation analysis
+library(mediation)
+med_results <- mediate(
+  model.m = med_model,
+  model.y = out_model,
+  treat = "index_aces",
+  mediator = "index_response",
+  boot = TRUE,
+  sims = 1000,
+  
+)
+
+summary(med_results)
+
+library(stargazer)
+
+# Export the mediator and outcome models to HTML
+stargazer(med_model, out_model,
+          type = "text")
+
+
+# Extract standard errors for all mediation effects
+acme_control_se <- sd(med_results$d0.sims)           # ACME (control)
+acme_treated_se <- sd(med_results$d1.sims)           # ACME (treated)
+ade_control_se <- sd(med_results$z0.sims)            # ADE (control)
+ade_treated_se <- sd(med_results$z1.sims)            # ADE (treated)
+total_effect_se <- sd(med_results$tau.sims)          # Total Effect
+prop_control_se <- sd(med_results$n0.sims)           # Prop. Mediated (control)
+prop_treated_se <- sd(med_results$n1.sims)           # Prop. Mediated (treated)
+
+# For average effects, calculate SE from average of bootstrap samples
+acme_avg_se <- sd((med_results$d0.sims + med_results$d1.sims)/2)    # ACME (average)
+ade_avg_se <- sd((med_results$z0.sims + med_results$z1.sims)/2)     # ADE (average)
+prop_avg_se <- sd((med_results$n0.sims + med_results$n1.sims)/2)    # Prop. Mediated (average)
+
+# Create comprehensive results table with rounding to 3 decimal places
+results_table <- data.frame(
+  Effect = c("ACME (control)", "ACME (treated)", "ADE (control)", "ADE (treated)",
+             "Total Effect", "Prop. Mediated (control)", "Prop. Mediated (treated)",
+             "ACME (average)", "ADE (average)", "Prop. Mediated (average)"),
+  Estimate = round(c(med_results$d0, med_results$d1, med_results$z0, med_results$z1,
+                     med_results$tau.coef, med_results$n0, med_results$n1,
+                     mean(c(med_results$d0, med_results$d1)),
+                     mean(c(med_results$z0, med_results$z1)),
+                     mean(c(med_results$n0, med_results$n1))), 3),
+  SE = round(c(acme_control_se, acme_treated_se, ade_control_se, ade_treated_se,
+               total_effect_se, prop_control_se, prop_treated_se,
+               acme_avg_se, ade_avg_se, prop_avg_se), 3)
+)
+
+print(results_table)
+```
+
+#Stratifying by Sex
+
+##Stratify datasets 
+```{r}
+cps_female <- cps_dta %>% filter (b_gender == "female")
+cps_male <- cps_dta %>% filter (b_gender == "male")
+jj_female <- jj_dta%>% filter (b_gender == "female")
+jj_male <- jj_dta %>% filter (b_gender == "male")
+```
+
+
+#Model 1 - Individual Aces
+```{r}
+####CPS #######
+##Female 
+out_model <- glm(clear_concern ~ one_c_homeless_bin + one_e_supervision_bin + two_a_secabuse_bin + two_b_physicalabuse_bin + two_c_emotionalabuse_bin + two_d_violence_bin + three_f_nutrition_bin
+                 + factor(race_recode) + age_bin , data = cps_female, family=binomial())
+
+
+##Male 
+out_model2 <- glm(clear_concern ~ one_c_homeless_bin + one_e_supervision_bin + two_a_secabuse_bin + two_b_physicalabuse_bin + two_c_emotionalabuse_bin + two_d_violence_bin + three_f_nutrition_bin
+                 + factor(race_recode) + age_bin , data = cps_male, family=binomial())
+
+stargazer(out_model, out_model2, type = "text")
+
+
+########JJ #############
+##Female 
+out_model <- glm(clear_concern ~ one_c_homeless_bin + one_e_supervision_bin + two_a_secabuse_bin + two_b_physicalabuse_bin + two_c_emotionalabuse_bin + two_d_violence_bin + three_f_nutrition_bin
+                 + factor(race_recode) + age_bin , data = jj_female, family=binomial())
+
+
+##Male 
+out_model2 <- glm(clear_concern ~ one_c_homeless_bin + one_e_supervision_bin + two_a_secabuse_bin + two_b_physicalabuse_bin + two_c_emotionalabuse_bin + two_d_violence_bin + three_f_nutrition_bin
+                 + factor(race_recode) + age_bin , data = jj_male, family=binomial())
+
+stargazer(out_model, out_model2, type = "text")
+
+
+```
+
+
+#Model 2 - Disordered Conduct
+```{r}
+##################### CPS ##################
+#Female
+out_model <- glm(clear_concern ~ one_a_running_bin + one_f_school+three_g_sud_bin + four_a_risksex_bin + five_a_unhealthyrel_bin + six_c_risktaking_bin 
+                 + factor(race_recode) + age_bin , data = cps_female, family=binomial())
+
+
+#Male 
+out_model2 <- glm(clear_concern ~ one_a_running_bin+one_f_school + three_g_sud_bin + four_a_risksex_bin + five_a_unhealthyrel_bin + six_c_risktaking_bin 
+                 + factor(race_recode) + age_bin , data = cps_male, family=binomial())
+
+
+stargazer(out_model, out_model2, type = "text")
+
+##################### JJ ##################
+#Female
+out_model <- glm(clear_concern ~ one_a_running_bin + one_f_school+three_g_sud_bin + four_a_risksex_bin + five_a_unhealthyrel_bin + six_c_risktaking_bin 
+                 + factor(race_recode) + age_bin , data = jj_female, family=binomial())
+
+
+#Male 
+out_model2 <- glm(clear_concern ~ one_a_running_bin+one_f_school + three_g_sud_bin + four_a_risksex_bin + five_a_unhealthyrel_bin + six_c_risktaking_bin 
+                 + factor(race_recode) + age_bin , data = jj_male, family=binomial())
+
+
+stargazer(out_model, out_model2, type = "text")
+```
+
+
+#Model 3 - Mediation Model based on behaviors
+```{r}
+table(cps_dta$race_recode)
+med_model <- lm(index_response ~ index_aces + race_recode + age_bin , data =  jj_male)
+summary(med_model)
+# Step 2: Fit the outcome model
+out_model <- glm(clear_concern ~ index_aces + index_response + race_recode + age_bin , data = jj_male, family=binomial())
+
+# Step 3: Conduct mediation analysis
+library(mediation)
+med_results <- mediate(
+  model.m = med_model,
+  model.y = out_model,
+  treat = "index_aces",
+  mediator = "index_response",
+  boot = TRUE,
+  sims = 1000,
+  
+)
+
+summary(med_results)
+
+
+
+```
+
