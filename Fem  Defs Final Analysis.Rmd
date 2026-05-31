@@ -318,7 +318,7 @@ table(femDef$enforce_binary, femDef$typologyName)
 
 #Percent of Enforce per Typology (in order manager, bottom, associate, partner, CEO)
 
-2/54
+2/55
 18/(141+18)
 2/37
 20/109
